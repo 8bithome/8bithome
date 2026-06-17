@@ -65,14 +65,56 @@ def render_page():
     if soxl and soxl['last'] is not None:
         col1.metric('SOXL (종가)', f"{soxl['last']:,}", f"{soxl['pct']:+.2f}%" if soxl['pct'] is not None else '')
     else:
-        col1.write('SOXL 데이터 불러오기 실패')
+        import streamlit as st
+        import yfinance as yf
 
-    if usdkrw and usdkrw['last'] is not None:
-        col2.metric('USD / KRW', f"{usdkrw['last']:,}", f"{usdkrw['pct']:+.2f}%" if usdkrw['pct'] is not None else '')
-    else:
-        col2.write('USD/KRW 데이터 불러오기 실패')
+        st.set_page_config(page_title='8bitHome', page_icon=':bar_chart:')
 
 
-if __name__ == '__main__':
-    render_page()
-    st.divider()
+        @st.cache_data
+        def get_market_data():
+            """Fetch SOXL and USD/KRW latest close and percent change via yfinance."""
+            result = {}
+            pairs = {
+                'soxl': 'SOXL',
+                'usdkrw': 'USDKRW=X',
+            }
+            for key, tk in pairs.items():
+                try:
+                    t = yf.Ticker(tk)
+                    hist = t.history(period='5d', interval='1d')
+                    if hist is None or hist.empty:
+                        result[key] = None
+                        continue
+                    closes = hist['Close']
+                    last = float(closes.iat[-1])
+                    prev = float(closes.iat[-2]) if len(closes) > 1 else last
+                    pct = ((last - prev) / prev * 100) if prev != 0 else 0.0
+                    result[key] = {'last': last, 'pct': pct}
+                except Exception:
+                    result[key] = None
+            return result
+
+
+        def render_page():
+            st.title('SOXL 종가 및 USD/KRW 환율 (Yahoo Finance)')
+            st.write('데이터 소스: Yahoo Finance (yfinance).')
+
+            data = get_market_data()
+            soxl = data.get('soxl')
+            usdkrw = data.get('usdkrw')
+
+            c1, c2 = st.columns(2)
+            if soxl:
+                c1.metric('SOXL (종가)', f"{soxl['last']:,}", f"{soxl['pct']:+.2f}%")
+            else:
+                c1.write('SOXL data unavailable')
+
+            if usdkrw:
+                c2.metric('USD / KRW', f"{usdkrw['last']:,}", f"{usdkrw['pct']:+.2f}%")
+            else:
+                c2.write('USD/KRW data unavailable')
+
+
+        if __name__ == '__main__':
+            render_page()
