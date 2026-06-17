@@ -1,151 +1,78 @@
 import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+import requests
+from bs4 import BeautifulSoup
+import re
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.set_page_config(page_title='8bitHome', page_icon=':bar_chart:')
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+def fetch_google_price(path: str):
+    """Fetch current price and percent change from Google Finance quote path.
+
+    `path` examples:
+    - 'SOXL:NYSEARCA' -> https://www.google.com/finance/quote/SOXL:NYSEARCA
+    - 'USD-KRW' -> https://www.google.com/finance/quote/USD-KRW
+    Returns dict {'last': float, 'pct': float or None} or None on failure.
     """
+    url = f'https://www.google.com/finance/quote/{path}'
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36'
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html.parser')
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+        # Price is often in a div with class containing 'YMlKec'
+        price_tag = soup.find('div', class_=re.compile('YMlKec'))
+        last = None
+        if price_tag:
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+            num = num.replace('\n', '')
+            text = price_tag.get_text().strip()
+            # Remove any non-digit/decimal/minus characters
+            cleaned = text.replace(',', '')
+            num = re.sub(r'[^0-9\.\-]', '', cleaned)
+            try:
+                last = float(num) if num else None
+            except Exception:
+                last = None
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+        # Percent change: look for span with class containing 'WlRRw' or 'IsqQVc'
+        pct = None
+        pct_tag = soup.find(['div', 'span'], class_=re.compile('(WlRRw|IsqQVc|PZPZlf)'))
+        if pct_tag:
+            pct_text = pct_tag.get_text()
+            m = re.search(r'([+-]?\d+[\.,]?\d*)%', pct_text)
+            if m:
+                pct = float(m.group(1).replace(',', '.'))
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
+        return {'last': last, 'pct': pct}
+    except Exception:
+        return None
 
 
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
+def render_page():
+    st.title('SOXL 종가 및 USD/KRW 환율 (Google Finance)')
+    st.write('데이터 소스: Google Finance (스크래핑 방식). 실시간성이 완벽히 보장되지 않을 수 있습니다.')
 
-st.header(f'GDP in {to_year}', divider='gray')
+    col1, col2 = st.columns(2)
 
-''
+    soxl = fetch_google_price('SOXL:NYSEARCA')
+    usdkrw = fetch_google_price('USD-KRW')
 
-cols = st.columns(4)
+    if soxl and soxl['last'] is not None:
+        col1.metric('SOXL (종가)', f"{soxl['last']:,}", f"{soxl['pct']:+.2f}%" if soxl['pct'] is not None else '')
+    else:
+        col1.write('SOXL 데이터 불러오기 실패')
 
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
+    if usdkrw and usdkrw['last'] is not None:
+        col2.metric('USD / KRW', f"{usdkrw['last']:,}", f"{usdkrw['pct']:+.2f}%" if usdkrw['pct'] is not None else '')
+    else:
+        col2.write('USD/KRW 데이터 불러오기 실패')
 
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
 
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+if __name__ == '__main__':
+    render_page()
+    st.divider()
